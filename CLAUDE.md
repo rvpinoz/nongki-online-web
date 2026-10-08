@@ -22,7 +22,9 @@ Tidak ada login dan tidak ada database.
 - **Tema**: kuning (`accent`), hitam (`ink-*`), putih (teks), merah (`danger`, dipakai juga sebagai warna brand). Jangan pakai warna di luar palet ini.
 - UI berbahasa Indonesia santai, sapaan "kamu", istilah "nongki/tongkrongan/ruang".
 - Owner menguji dari HP, jadi selalu cek perilaku mobile: tombol Back, layout sempit, fitur yang tidak didukung (share screen).
-- Staging di VPS dengan PM2: `web/ecosystem.config.js` (app `nongki-web`, cwd `/home/dev-staging/nongki-online-web/web`). Server dijalankan dengan nohup. Butuh **Node ≥ 20.9**.
+- Staging di VPS dengan PM2. Butuh **Node ≥ 20.9**.
+  - `web/ecosystem.config.js`: app `nongki-web`, cwd `/home/dev-staging/nongki-online-web/web`
+  - `server/ecosystem.config.js`: app `nongki-server`, menjalankan `dist/index.js`. Env (`CLIENT_ORIGIN`, dll.) diisi di file ini. Wajib 1 instance karena state room ada di memori.
 
 ## 1. Struktur & Stack
 
