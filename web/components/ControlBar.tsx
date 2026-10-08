@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Check, Link2, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Users, Video, VideoOff } from "lucide-react";
+import { Check, Link2, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Sparkles, Users, Video, VideoOff } from "lucide-react";
+import type { Panel } from "@/lib/types";
 
 type Props = {
   audioOn: boolean;
@@ -9,21 +10,22 @@ type Props = {
   hasAudio: boolean;
   hasVideo: boolean;
   sharing: boolean;
-  panel: "chat" | "people" | null;
+  canShareScreen: boolean;
+  effectsActive: boolean;
+  panel: Panel | null;
   unread: number;
   participantCount: number;
   onToggleAudio: () => void;
   onToggleVideo: () => void;
   onToggleShare: () => void;
-  onTogglePanel: (panel: "chat" | "people") => void;
+  onTogglePanel: (panel: Panel) => void;
   onLeave: () => void;
 };
 
-function RoundButton({
+export function RoundButton({
   label,
   onClick,
   active = true,
-  danger = false,
   highlight = false,
   disabled = false,
   badge,
@@ -32,19 +34,16 @@ function RoundButton({
   label: string;
   onClick: () => void;
   active?: boolean;
-  danger?: boolean;
   highlight?: boolean;
   disabled?: boolean;
   badge?: ReactNode;
   children: ReactNode;
 }) {
-  const color = danger
-    ? "bg-danger hover:bg-danger-dark text-white"
-    : highlight
-      ? "bg-accent text-ink-950 hover:bg-accent-dark"
-      : active
-        ? "bg-ink-700 hover:bg-ink-600 text-white"
-        : "bg-danger/90 hover:bg-danger text-white";
+  const color = highlight
+    ? "bg-accent text-ink-950 hover:bg-accent-dark"
+    : active
+      ? "bg-ink-700 hover:bg-ink-600 text-white"
+      : "bg-danger hover:bg-danger-dark text-white";
 
   return (
     <button
@@ -53,7 +52,8 @@ function RoundButton({
       disabled={disabled}
       title={label}
       aria-label={label}
-      className={`relative grid h-11 w-11 place-items-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-40 sm:h-12 sm:w-12 ${color}`}
+      aria-pressed={highlight || undefined}
+      className={`relative grid h-10 w-10 shrink-0 place-items-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-40 sm:h-12 sm:w-12 ${color}`}
     >
       {children}
       {badge}
@@ -70,14 +70,15 @@ export function ControlBar(props: Props) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      prompt("Salin link ini:", window.location.href);
+      // Clipboard diblokir (mis. bukan HTTPS): pakai share sheet bawaan HP kalau ada.
+      navigator.share?.({ url: window.location.href }).catch(() => undefined);
     }
   };
 
   const iconCls = "h-5 w-5";
 
   return (
-    <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+    <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-3">
       <RoundButton
         label={props.audioOn ? "Matikan mikrofon" : "Nyalakan mikrofon"}
         onClick={props.onToggleAudio}
@@ -97,12 +98,27 @@ export function ControlBar(props: Props) {
       </RoundButton>
 
       <RoundButton
-        label={props.sharing ? "Berhenti berbagi layar" : "Bagikan layar"}
-        onClick={props.onToggleShare}
-        highlight={props.sharing}
+        label="Efek & kualitas video"
+        onClick={() => props.onTogglePanel("effects")}
+        highlight={props.panel === "effects"}
+        badge={
+          props.effectsActive && props.panel !== "effects" ? (
+            <span className="absolute right-0 top-0 h-3 w-3 rounded-full bg-accent ring-2 ring-ink-950" />
+          ) : null
+        }
       >
-        <MonitorUp className={iconCls} />
+        <Sparkles className={iconCls} />
       </RoundButton>
+
+      {props.canShareScreen && (
+        <RoundButton
+          label={props.sharing ? "Berhenti berbagi layar" : "Bagikan layar"}
+          onClick={props.onToggleShare}
+          highlight={props.sharing}
+        >
+          <MonitorUp className={iconCls} />
+        </RoundButton>
+      )}
 
       <RoundButton label={copied ? "Link tersalin" : "Salin link undangan"} onClick={copyLink} highlight={copied}>
         {copied ? <Check className={iconCls} /> : <Link2 className={iconCls} />}
@@ -115,7 +131,7 @@ export function ControlBar(props: Props) {
         onClick={() => props.onTogglePanel("people")}
         highlight={props.panel === "people"}
         badge={
-          <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-ink-950 px-1 text-[10px] font-semibold text-white ring-1 ring-white/15">
+          <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-white px-1 text-[10px] font-bold text-ink-950">
             {props.participantCount}
           </span>
         }
@@ -129,7 +145,7 @@ export function ControlBar(props: Props) {
         highlight={props.panel === "chat"}
         badge={
           props.unread > 0 ? (
-            <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[10px] font-semibold text-white">
+            <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
               {props.unread > 9 ? "9+" : props.unread}
             </span>
           ) : null
@@ -143,7 +159,7 @@ export function ControlBar(props: Props) {
         onClick={props.onLeave}
         title="Keluar dari meeting"
         aria-label="Keluar dari meeting"
-        className="ml-1 flex h-11 items-center gap-2 rounded-full bg-danger px-4 font-medium text-white transition hover:bg-danger-dark sm:h-12 sm:px-5"
+        className="flex h-10 w-10 shrink-0 items-center justify-center gap-2 rounded-full bg-danger font-semibold text-white transition hover:bg-danger-dark sm:ml-1 sm:h-12 sm:w-auto sm:px-5"
       >
         <PhoneOff className={iconCls} />
         <span className="hidden sm:inline">Keluar</span>

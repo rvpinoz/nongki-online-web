@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
-import { ICE_SERVERS } from "@/lib/config";
+import { DEFAULT_MAX_PARTICIPANTS, FALLBACK_ICE_SERVERS, MAX_CHAT_MESSAGES } from "@/lib/config";
+import { applyEncoding, encodingFor, type QualityMode } from "@/lib/quality";
 import { createSocket } from "@/lib/socket";
-import type { ChatMessage, ConnectionStatus, ParticipantInfo, RemoteParticipant } from "@/lib/types";
+import type { ChatMessage, ConnectionStatus, ParticipantInfo, RemoteParticipant, ServerConfig } from "@/lib/types";
 
 type PeerEntry = {
   pc: RTCPeerConnection;
@@ -16,28 +17,48 @@ type Options = {
   roomId: string;
   name: string;
   active: boolean; // true setelah user klik "Gabung"
-  localStream: MediaStream | null;
-  screenTrack: MediaStreamTrack | null;
+  localStream: MediaStream | null; // sumber audio
+  outgoingVideo: MediaStreamTrack | null; // layar > kamera dengan efek > kamera asli
+  isScreen: boolean;
+  quality: QualityMode;
   audioOn: boolean;
   videoOn: boolean;
 };
+
+/** Transceiver video milik koneksi ini (selalu satu, dibuat oleh offer pertama). */
+function videoTransceiver(pc: RTCPeerConnection): RTCRtpTransceiver | undefined {
+  return pc.getTransceivers().find((t) => t.receiver.track?.kind === "video");
+}
 
 /**
  * Inti video call: koneksi ke signaling server + satu RTCPeerConnection per peserta (mesh).
  * Peserta yang baru masuk selalu membuat offer ke peserta lama.
  */
-export function useWebRTC({ roomId, name, active, localStream, screenTrack, audioOn, videoOn }: Options) {
+export function useWebRTC({ roomId, name, active, localStream, outgoingVideo, isScreen, quality, audioOn, videoOn }: Options) {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [participants, setParticipants] = useState<RemoteParticipant[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [myId, setMyId] = useState<string | null>(null);
+  const [maxParticipants, setMaxParticipants] = useState(DEFAULT_MAX_PARTICIPANTS);
 
   const socketRef = useRef<Socket | null>(null);
   const peersRef = useRef<Map<string, PeerEntry>>(new Map());
+  const iceServersRef = useRef<RTCIceServer[]>(FALLBACK_ICE_SERVERS);
 
   // Nilai terbaru disimpan di ref supaya handler socket tidak memakai nilai basi.
-  const latest = useRef({ name, localStream, screenTrack, audioOn, videoOn });
-  latest.current = { name, localStream, screenTrack, audioOn, videoOn };
+  const latest = useRef({ name, localStream, outgoingVideo, isScreen, quality, audioOn, videoOn });
+  latest.current = { name, localStream, outgoingVideo, isScreen, quality, audioOn, videoOn };
+
+  /** Atur bitrate/resolusi semua koneksi sesuai jumlah peserta & mode kualitas. */
+  const applyQuality = useCallback(() => {
+    const peers = peersRef.current;
+    const { isScreen: screen, quality: mode } = latest.current;
+    peers.forEach(({ pc }) => {
+      const sender = videoTransceiver(pc)?.sender;
+      if (!sender?.track) return;
+      applyEncoding(sender, encodingFor(sender.track, { peerCount: peers.size, mode, isScreen: screen }));
+    });
+  }, []);
 
   useEffect(() => {
     if (!active) return;
@@ -59,6 +80,7 @@ export function useWebRTC({ roomId, name, active, localStream, screenTrack, audi
     const closePeer = (id: string) => {
       peers.get(id)?.pc.close();
       peers.delete(id);
+      applyQuality();
     };
 
     const closeAll = () => {
@@ -71,20 +93,20 @@ export function useWebRTC({ roomId, name, active, localStream, screenTrack, audi
       const existing = peers.get(remoteId);
       if (existing) return existing;
 
-      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      const pc = new RTCPeerConnection({ iceServers: iceServersRef.current });
       const entry: PeerEntry = { pc, remoteTracks: [], pendingIce: [] };
       peers.set(remoteId, entry);
 
-      const { localStream: local, screenTrack: screen } = latest.current;
+      const { localStream: local, outgoingVideo: video } = latest.current;
       const msid = local ?? new MediaStream();
       const audioTrack = local?.getAudioTracks()[0];
-      const videoTrack = screen ?? local?.getVideoTracks()[0];
 
-      // Kalau kita tidak punya kamera/mic, tetap minta terima media dari lawan.
       if (audioTrack) pc.addTrack(audioTrack, msid);
       else if (initiator) pc.addTransceiver("audio", { direction: "recvonly" });
-      if (videoTrack) pc.addTrack(videoTrack, msid);
-      else if (initiator) pc.addTransceiver("video", { direction: "recvonly" });
+      // Jalur video selalu dua arah, walau belum ada kamera, supaya share screen bisa
+      // dikirim belakangan lewat replaceTrack tanpa negosiasi ulang.
+      if (video) pc.addTrack(video, msid);
+      else if (initiator) pc.addTransceiver("video", { direction: "sendrecv" });
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
@@ -99,8 +121,18 @@ export function useWebRTC({ roomId, name, active, localStream, screenTrack, audi
 
       pc.onconnectionstatechange = () => {
         patchRemote(remoteId, { connection: pc.connectionState });
+        if (pc.connectionState === "connected") applyQuality();
+        // Coba pulihkan jalur ICE yang putus (mis. pindah Wi-Fi → data seluler).
+        if (pc.connectionState === "failed" && initiator) {
+          pc.restartIce();
+          pc.createOffer({ iceRestart: true })
+            .then((offer) => pc.setLocalDescription(offer))
+            .then(() => socket.emit("offer", { to: remoteId, sdp: pc.localDescription }))
+            .catch((err) => console.warn("ICE restart gagal", err));
+        }
       };
 
+      applyQuality();
       return entry;
     };
 
@@ -115,10 +147,15 @@ export function useWebRTC({ roomId, name, active, localStream, screenTrack, audi
       }
     };
 
+    socket.on("config", (config: ServerConfig) => {
+      if (Array.isArray(config?.iceServers) && config.iceServers.length > 0) iceServersRef.current = config.iceServers;
+      if (typeof config?.maxParticipants === "number") setMaxParticipants(config.maxParticipants);
+    });
+
     socket.on("connect", () => {
       setMyId(socket.id ?? null);
-      const { name: myName, audioOn: a, videoOn: v, screenTrack: s } = latest.current;
-      socket.emit("join-room", { roomId, name: myName, audio: a, video: v || !!s });
+      const { name: myName, audioOn: a, videoOn: v, isScreen: s } = latest.current;
+      socket.emit("join-room", { roomId, name: myName, audio: a, video: v || s });
     });
 
     socket.on("disconnect", () => {
@@ -156,6 +193,9 @@ export function useWebRTC({ roomId, name, active, localStream, screenTrack, audi
       try {
         await entry.pc.setRemoteDescription(sdp);
         await flushIce(entry);
+        // Kalau kita tidak punya kamera, tetap buka arah kirim video untuk share screen nanti.
+        const video = videoTransceiver(entry.pc);
+        if (video && !video.sender.track && video.direction === "recvonly") video.direction = "sendrecv";
         await entry.pc.setLocalDescription(await entry.pc.createAnswer());
         socket.emit("answer", { to: from, sdp: entry.pc.localDescription });
       } catch (err) {
@@ -165,7 +205,7 @@ export function useWebRTC({ roomId, name, active, localStream, screenTrack, audi
 
     socket.on("answer", async ({ from, sdp }: { from: string; sdp: RTCSessionDescriptionInit }) => {
       const entry = peers.get(from);
-      if (!entry) return;
+      if (!entry || entry.pc.signalingState !== "have-local-offer") return;
       try {
         await entry.pc.setRemoteDescription(sdp);
         await flushIce(entry);
@@ -198,10 +238,14 @@ export function useWebRTC({ roomId, name, active, localStream, screenTrack, audi
     });
 
     socket.on("chat-message", (message: ChatMessage) => {
-      setMessages((prev) => [...prev, message]);
+      setMessages((prev) => {
+        const next = [...prev, message];
+        return next.length > MAX_CHAT_MESSAGES ? next.slice(-MAX_CHAT_MESSAGES) : next;
+      });
     });
 
-    socket.on("room-full", () => {
+    socket.on("room-full", ({ max }: { max?: number }) => {
+      if (typeof max === "number") setMaxParticipants(max);
       setStatus("full");
       socket.disconnect();
     });
@@ -218,26 +262,30 @@ export function useWebRTC({ roomId, name, active, localStream, screenTrack, audi
       closeAll();
       socketRef.current = null;
     };
-  }, [active, roomId]);
+  }, [active, roomId, applyQuality]);
 
-  // Ganti track video yang dikirim saat mulai/berhenti share screen (tanpa negosiasi ulang).
+  // Ganti track video yang dikirim (kamera ↔ efek ↔ layar) tanpa negosiasi ulang.
   useEffect(() => {
-    const cameraTrack = localStream?.getVideoTracks()[0] ?? null;
-    const outgoing = screenTrack ?? cameraTrack;
+    const pending: Promise<void>[] = [];
     peersRef.current.forEach(({ pc }) => {
-      const transceiver = pc.getTransceivers().find((t) => t.receiver.track?.kind === "video");
-      if (transceiver && transceiver.sender.track !== outgoing) {
-        transceiver.sender.replaceTrack(outgoing).catch((err) => console.warn("replaceTrack gagal", err));
+      const transceiver = videoTransceiver(pc);
+      if (transceiver && transceiver.sender.track !== outgoingVideo) {
+        pending.push(transceiver.sender.replaceTrack(outgoingVideo).catch((err) => console.warn("replaceTrack gagal", err)));
       }
     });
-  }, [screenTrack, localStream]);
+    Promise.all(pending).then(applyQuality);
+  }, [outgoingVideo, applyQuality]);
+
+  useEffect(() => {
+    applyQuality();
+  }, [participants.length, isScreen, quality, applyQuality]);
 
   // Beri tahu peserta lain saat mic/kamera/share screen berubah.
   useEffect(() => {
     const socket = socketRef.current;
     if (!socket?.connected || status !== "connected") return;
-    socket.emit("media-state", { audio: audioOn, video: videoOn || !!screenTrack, screen: !!screenTrack });
-  }, [audioOn, videoOn, screenTrack, status]);
+    socket.emit("media-state", { audio: audioOn, video: videoOn || isScreen, screen: isScreen });
+  }, [audioOn, videoOn, isScreen, status]);
 
   const sendMessage = useCallback((text: string) => {
     const trimmed = text.trim();
@@ -245,5 +293,5 @@ export function useWebRTC({ roomId, name, active, localStream, screenTrack, audi
     socketRef.current?.emit("chat-message", { text: trimmed });
   }, []);
 
-  return { status, participants, messages, myId, sendMessage };
+  return { status, participants, messages, myId, maxParticipants, sendMessage };
 }

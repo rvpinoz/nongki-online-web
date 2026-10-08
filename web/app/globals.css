@@ -1,6 +1,21 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* Tema Nongki Online: hitam (ink), kuning (accent), merah (danger/brand), putih (teks). */
+@theme {
+  --color-ink-950: #0a0a0a;
+  --color-ink-900: #141414;
+  --color-ink-800: #1e1e1e;
+  --color-ink-700: #2b2b2b;
+  --color-ink-600: #3b3b3b;
+
+  --color-accent: #ffcc00;
+  --color-accent-dark: #e6b800;
+
+  --color-danger: #e5383b;
+  --color-danger-dark: #c1272d;
+
+  --font-sans: var(--font-jakarta), system-ui, sans-serif;
+}
 
 :root {
   color-scheme: dark;
@@ -8,10 +23,16 @@
 
 html,
 body {
-  background: #0d0f12;
-  color: #f5f7fa;
+  background: #0a0a0a;
+  color: #fafafa;
 }
 
 body {
   -webkit-font-smoothing: antialiased;
+}
+
+/* Tombol di Tailwind 4 default-nya cursor biasa. */
+button:not(:disabled),
+[role="button"]:not(:disabled) {
+  cursor: pointer;
 }

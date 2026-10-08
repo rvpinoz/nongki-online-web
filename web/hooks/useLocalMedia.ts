@@ -21,12 +21,15 @@ export function useLocalMedia() {
   const [videoOn, setVideoOn] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [canShareScreen, setCanShareScreen] = useState(false);
 
   const streamRef = useRef<MediaStream | null>(null);
   const screenRef = useRef<MediaStreamTrack | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    // HP (Android/iOS) umumnya tidak mendukung getDisplayMedia → tombol share disembunyikan.
+    setCanShareScreen(typeof navigator.mediaDevices?.getDisplayMedia === "function");
 
     async function start() {
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -37,16 +40,17 @@ export function useLocalMedia() {
         return;
       }
 
+      const video: MediaTrackConstraints = {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30, max: 30 },
+        facingMode: "user",
+      };
+      const audio: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
       const attempts: { constraints: MediaStreamConstraints; warning: string | null }[] = [
-        {
-          constraints: {
-            video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-            audio: { echoCancellation: true, noiseSuppression: true },
-          },
-          warning: null,
-        },
-        { constraints: { audio: true, video: false }, warning: "Kamera tidak bisa diakses — kamu bergabung dengan audio saja." },
-        { constraints: { audio: false, video: true }, warning: "Mikrofon tidak bisa diakses — kamu bergabung dengan video saja." },
+        { constraints: { video, audio }, warning: null },
+        { constraints: { audio, video: false }, warning: "Kamera tidak bisa diakses — kamu bergabung dengan audio saja." },
+        { constraints: { audio: false, video }, warning: "Mikrofon tidak bisa diakses — kamu bergabung dengan video saja." },
       ];
 
       let lastError: unknown = null;
@@ -89,6 +93,7 @@ export function useLocalMedia() {
 
   const hasAudio = (stream?.getAudioTracks().length ?? 0) > 0;
   const hasVideo = (stream?.getVideoTracks().length ?? 0) > 0;
+  const cameraTrack = stream?.getVideoTracks()[0] ?? null;
 
   const toggleAudio = useCallback(() => {
     const tracks = streamRef.current?.getAudioTracks() ?? [];
@@ -115,14 +120,16 @@ export function useLocalMedia() {
   }, []);
 
   const startScreenShare = useCallback(async () => {
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      alert("Browser ini tidak mendukung berbagi layar.");
-      return;
-    }
+    if (!navigator.mediaDevices?.getDisplayMedia) return;
     try {
-      const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const display = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 15, max: 30 } },
+        audio: false,
+      });
       const track = display.getVideoTracks()[0];
       if (!track) return;
+      // Teks & detail diutamakan dibanding kehalusan gerak.
+      track.contentHint = "detail";
       // Dipanggil saat user klik "Stop sharing" dari bar bawaan browser.
       track.onended = () => {
         if (screenRef.current === track) stopScreenShare();
@@ -144,11 +151,13 @@ export function useLocalMedia() {
 
   return {
     stream,
+    cameraTrack,
     screenTrack,
     audioOn,
     videoOn,
     hasAudio,
     hasVideo,
+    canShareScreen,
     loading,
     error,
     toggleAudio,

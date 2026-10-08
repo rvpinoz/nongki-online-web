@@ -4,4 +4,7 @@ dist/
 .env
 .env.local
 *.log
+nohup.out
 .DS_Store
+# Disalin otomatis dari node_modules (scripts/copy-mediapipe.mjs)
+web/public/mediapipe/wasm/

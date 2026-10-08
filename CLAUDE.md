@@ -1,152 +1,228 @@
 # Nongki Online — Catatan Codebase
 
 > Peta project untuk pengembangan lanjutan. Baca ini dulu sebelum menambah fitur, tidak perlu scan ulang semua file.
-> Terakhir di-scan: 2026-10-08 (commit `b43ce73 first commit`).
+> Terakhir diperbarui: 2026-10-08.
 
-**Nongki Online** adalah aplikasi video meeting/nongkrong berbasis web (mirip versi mini Google Meet). Fiturnya: video/audio P2P lewat WebRTC (mesh, maks. 6 orang), lobby dengan preview kamera, mute/kamera, share screen, chat, daftar peserta, dan salin link. Tidak ada login dan tidak ada database.
+**Nongki Online** adalah aplikasi nongkrong/video meeting berbasis web. Fiturnya:
+- Video/audio P2P lewat WebRTC (mesh)
+- Kualitas video dinamis
+- Virtual background, filter warna, dan stiker wajah (MediaPipe, diproses lokal)
+- Share screen dengan tampilan spotlight + fullscreen
+- Chat, daftar peserta, dan salin link
 
-> ⚠️ **Branding di kode masih "MeetLite"**, belum diganti ke "Nongki Online". Lokasinya:
-> - `web/components/Logo.tsx`: teks logo `MeetLite`
-> - `web/app/layout.tsx`: `metadata.title` dan `description`
-> - `web/app/room/[id]/page.tsx`: key localStorage `NAME_KEY = "meetlite:name"` (kalau diganti, nama tersimpan user hilang sekali)
-> - `server/src/index.ts`: log `MeetLite signaling server ...` dan komentar contoh origin
-> - `server/package.json` (`meetlite-server`), `web/package.json` (`meetlite-web`), root `package-lock.json` (`meetlite`)
-> - `README.md`, `docs-rencana.md` (file read-only, `r--r--r--`)
-> - Nama folder root: `meetlite/`
+Tidak ada login dan tidak ada database.
 
----
+## 0. Prinsip & Preferensi Owner (WAJIB diikuti)
+
+- **Utamakan performa dan security** di setiap fitur baru.
+  - Validasi semua payload di server.
+  - Jangan taruh secret di `NEXT_PUBLIC_*`.
+  - Fitur berat di-lazy-load.
+  - Jangan menambah request ke pihak ketiga tanpa alasan, dan update CSP kalau memang perlu.
+- **Tema**: kuning (`accent`), hitam (`ink-*`), putih (teks), merah (`danger`, dipakai juga sebagai warna brand). Jangan pakai warna di luar palet ini.
+- UI berbahasa Indonesia santai, sapaan "kamu", istilah "nongki/tongkrongan/ruang".
+- Owner menguji dari HP, jadi selalu cek perilaku mobile: tombol Back, layout sempit, fitur yang tidak didukung (share screen).
+- Staging di VPS dengan PM2: `web/ecosystem.config.js` (app `nongki-web`, cwd `/home/dev-staging/nongki-online-web/web`). Server dijalankan dengan nohup. Butuh **Node ≥ 20.9**.
 
 ## 1. Struktur & Stack
 
 ```
-meetlite/
-├── CLAUDE.md            ← file ini
-├── README.md            ← cara run, config, deploy, batasan
-├── docs-rencana.md      ← dokumen rencana awal V1 + roadmap (read-only)
-├── server/              ← signaling server: Node + Express 4 + Socket.IO 4 (TypeScript, tsx), port 4000
-│   └── src/index.ts     ← SATU-SATUNYA file server (room, relay signaling, chat)
-└── web/                 ← frontend: Next.js 14 App Router + React 18 + Tailwind 3 + lucide-react, port 3000
+meetlite/                      (nama folder lama; nama app = Nongki Online)
+├── CLAUDE.md / README.md
+├── docs-rencana.md            ← rencana awal V1 (read-only, masih menyebut "MeetLite")
+├── server/                    ← Node + Express 4 + Socket.IO 4 (TypeScript, tsx), port 4000
+│   ├── src/index.ts           ← SATU-SATUNYA file server
+│   └── .env.example
+└── web/                       ← Next.js 16 (App Router) + React 19 + Tailwind 4 + lucide-react 1.x + @mediapipe/tasks-vision
+    ├── next.config.mjs        ← security headers + CSP (connect-src dari NEXT_PUBLIC_SIGNALING_URL saat build)
+    ├── postcss.config.mjs     ← @tailwindcss/postcss
+    ├── scripts/copy-mediapipe.mjs  ← salin wasm MediaPipe ke public/ (postinstall & prebuild)
+    ├── public/mediapipe/
+    │   ├── models/            ← selfie_segmenter.tflite, face_detector.tflite (±240 KB, di-commit)
+    │   └── wasm/              ← hasil copy otomatis (gitignored, ±13 MB, hanya diunduh saat efek dipakai)
     ├── app/
-    │   ├── layout.tsx           ← font Plus Jakarta Sans (--font-sans), metadata, lang="id"
-    │   ├── globals.css          ← dark theme dasar (#0d0f12)
-    │   ├── page.tsx             ← Beranda: buat meeting / gabung dengan kode atau link
-    │   └── room/[id]/page.tsx   ← Lobby → Meeting → Keluar + layar error/penuh (state machine `stage`)
+    │   ├── globals.css        ← @theme Tailwind 4 = palet warna (TIDAK ada tailwind.config lagi)
+    │   ├── layout.tsx         ← font Plus Jakarta Sans (var --font-jakarta), metadata, viewport
+    │   ├── icon.svg           ← favicon
+    │   ├── page.tsx           ← Beranda: buat ruang / gabung pakai kode atau link
+    │   └── room/[id]/page.tsx ← state machine stage: lobby → meeting → left; spotlight; back guard; panel
     ├── components/
-    │   ├── Logo.tsx             ← logo + link ke "/"
-    │   ├── VideoGrid.tsx        ← CSS grid sesuai jumlah tile (1 / 2 / 2×2 / 3×2)
-    │   ├── VideoTile.tsx        ← <video> + avatar inisial + label nama + ikon mic/screen + overlay "Menyambungkan…"
-    │   ├── ControlBar.tsx       ← tombol mic, kamera, share, salin link, peserta, chat, keluar (komponen RoundButton)
-    │   ├── ChatPanel.tsx        ← list pesan + input (max 1000 char)
-    │   └── ParticipantList.tsx  ← daftar peserta + status mic/kamera/screen
+    │   ├── Logo.tsx           ← ikon Coffee kuning + "Nongki" putih "Online" merah
+    │   ├── VideoGrid.tsx      ← VideoGrid (1–12 tile) + SpotlightLayout (share screen besar + strip)
+    │   ├── VideoTile.tsx      ← memo; <video>, avatar, label, tombol fullscreen (allowFullscreen), compact
+    │   ├── ControlBar.tsx     ← RoundButton (di-export, dipakai juga di lobby) + bar kontrol
+    │   ├── EffectsPanel.tsx   ← kualitas video, background, filter warna, stiker
+    │   ├── ConfirmDialog.tsx  ← dialog konfirmasi (keluar meeting)
+    │   ├── ChatPanel.tsx, ParticipantList.tsx
     ├── hooks/
-    │   ├── useLocalMedia.ts     ← getUserMedia (dengan fallback), toggle mic/cam, share screen, stopAll
-    │   └── useWebRTC.ts         ← socket + RTCPeerConnection per peserta, chat, media-state
+    │   ├── useLocalMedia.ts   ← getUserMedia (fallback audio/video saja), toggle, share screen, canShareScreen
+    │   ├── useVideoEffects.ts ← nyalakan VideoEffectsProcessor hanya jika ada efek; outputTrack
+    │   ├── useWebRTC.ts       ← socket + RTCPeerConnection per peserta, kualitas, chat, config server
+    │   └── useBackGuard.ts    ← tahan tombol Back (history guard entry)
     └── lib/
-        ├── config.ts            ← SIGNALING_URL, ICE_SERVERS (STUN Google + TURN opsional), MAX_PARTICIPANTS
-        ├── socket.ts            ← createSocket() (transport websocket→polling)
-        ├── room.ts              ← generateRoomId() "abc-defg-hij", parseRoomInput(), initials()
-        └── types.ts             ← ParticipantInfo, RemoteParticipant, ChatMessage, ConnectionStatus
+        ├── config.ts          ← SIGNALING_URL, FALLBACK_ICE_SERVERS, DEFAULT_MAX_PARTICIPANTS, path MediaPipe
+        ├── quality.ts         ← tier kualitas & applyEncoding (setParameters)
+        ├── socket.ts, room.ts, types.ts (Panel, ServerConfig, ...)
+        └── effects/
+            ├── types.ts       ← VideoEffects, COLOR_FILTERS, FACE_STICKERS
+            ├── backgrounds.ts ← preset background digambar procedural di canvas
+            ├── stickers.ts    ← gambar stiker dari keypoint wajah
+            └── processor.ts   ← VideoEffectsProcessor (MediaPipe + canvas → captureStream)
 ```
 
-- Path alias `@/` = root folder `web/`.
-- Semua halaman dan komponen interaktif memakai `"use client"`. Tidak ada API route atau server action di Next.
-- `next.config.mjs` sengaja memakai `reactStrictMode: false` supaya efek WebRTC tidak jalan dua kali di dev. **Jangan diaktifkan** kecuali efeknya sudah dibuat idempotent.
-- Belum ada test, belum ada config ESLint/Prettier. UI teks berbahasa Indonesia dengan sapaan "kamu".
+- Path alias `@/` = `web/`. Semua halaman `"use client"`. Tidak ada API route atau server action.
+- `reactStrictMode: false` disengaja (efek WebRTC jangan dobel). Jangan diaktifkan.
+- Tidak ada test runner atau ESLint. Verifikasi pakai `npx tsc --noEmit`, `npm run build`, dan E2E manual.
+  - Pernah dites dengan puppeteer-core + Chrome lokal: flag `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream --auto-select-desktop-capture-source="Entire screen"`.
+  - Teknik: monkeypatch `window.RTCPeerConnection` untuk inspeksi sender/encoding.
+- `npm audit` di web dan server: 0 vulnerability (per 2026-10-08).
 
 ## 2. Menjalankan
 
 ```bash
-cd server && npm install && npm run dev     # http://localhost:4000  (cek: GET /health → {ok, rooms})
-cd web && cp .env.example .env.local && npm install && npm run dev   # http://localhost:3000
+cd server && npm install && npm run dev        # :4000, GET /health → {ok:true}
+cd web && cp .env.example .env.local && npm install && npm run dev   # :3000
 ```
-Build: `server`: `npm run build && npm start` (output `dist/`). `web`: `npm run build && npm start`.
 
-**Env web** (`NEXT_PUBLIC_*`, dibaca di `lib/config.ts`): `SIGNALING_URL` (default `http://localhost:4000`), `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`.
-**Env server**: `PORT` (4000) dan `CLIENT_ORIGIN` (default `*`, beberapa origin dipisah koma; dipakai untuk CORS Express dan Socket.IO).
+**Env web**: `NEXT_PUBLIC_SIGNALING_URL` saja. Nilainya masuk ke CSP saat build, jadi **rebuild kalau berubah**.
 
-Kamera/mic hanya bisa diakses di `localhost` atau HTTPS. Untuk test dari HP, pakai tunnel (ngrok/cloudflared) untuk port 3000 dan 4000.
+**Env server** (`server/.env.example`):
+- `PORT`
+- `CLIENT_ORIGIN`: wajib di production; dipakai untuk CORS dan juga cek origin WebSocket lewat `allowRequest`
+- `MAX_PARTICIPANTS`: default 8, di-clamp 2–12
+- `MAX_CONN_PER_IP`: default 20
+- `TRUST_PROXY=1`: kalau di belakang proxy
+- `TURN_URLS` + `TURN_SECRET`: kredensial TURN sementara gaya coturn REST, HMAC-SHA1, TTL 6 jam
 
 ## 3. Arsitektur & Alur
 
-- **Mesh P2P**: media langsung antar-browser. Server hanya relay signaling dan chat.
-- **State server** (in-memory, hilang saat restart): `rooms: Map<roomId, Map<socketId, Participant>>`, dengan `Participant = { socketId, name, audio, video, screen }`. Room dihapus saat kosong.
-- Validasi server: `ROOM_ID_PATTERN = /^[a-z0-9-]{3,40}$/`, nama di-trim maks. 40 char (default "Tamu"), chat maks. 1000 char, relay signaling hanya ke socket di room yang sama (`inSameRoom`).
-- **Aturan offer**: peserta **baru** membuat offer ke setiap peserta lama (dari `existing-users`). Peserta lama hanya menjawab. Ini mencegah glare.
-- ICE candidate yang datang sebelum `remoteDescription` diantrikan di `pendingIce` lalu di-flush.
-- **Share screen**: `replaceTrack()` pada sender video, tanpa renegosiasi (efek di `useWebRTC.ts`). Kalau user join tanpa kamera, tidak ada sender video, jadi share screen tidak terkirim (batasan yang sudah diketahui).
-- **Mute/kamera off**: `track.enabled = false` lalu broadcast `media-state`. Track tidak dihentikan.
-- **Reconnect**: saat socket `disconnect`, semua peer ditutup dan status menjadi `reconnecting`. Saat `connect` lagi, `join-room` dikirim ulang dan koneksi peer dibangun ulang. Riwayat chat lokal tetap ada.
-- Peserta yang baru masuk **tidak** melihat chat sebelumnya karena server tidak menyimpan riwayat.
-
-### Alur halaman `room/[id]/page.tsx`
-`stage`: `"lobby"` → (submit nama) → `"meeting"` → (Keluar) → `"left"`.
-- `useLocalMedia()` jalan sejak lobby (preview kamera).
-- `useWebRTC({ active: stage === "meeting" && validRoom, ... })`: socket baru dibuat saat `active` menjadi true dan ditutup di cleanup.
-- Saat meeting, `rtc.status === "full"` atau `"error"` menampilkan `CenteredMessage`.
-- `panel: "chat" | "people" | null` untuk panel samping (fullscreen di mobile, `md:w-80` di desktop).
-- Unread chat dihitung dari `readCount` dan hanya menghitung pesan orang lain.
-- Nama disimpan di `localStorage["meetlite:name"]`.
-- Tombol "Gabung lagi" memanggil `window.location.reload()`.
+- **Mesh P2P**. Server hanya relay signaling dan chat. State in-memory `rooms: Map<roomId, Map<socketId, Participant>>`.
+- **Aturan offer**: peserta baru meng-offer ke semua peserta lama (cegah glare). ICE diantrikan di `pendingIce` sampai remoteDescription ada.
+- **ICE restart** otomatis oleh pihak initiator saat `connectionState === "failed"`.
+- **Jalur video selalu dua arah** (`addTransceiver("video", sendrecv)` / ubah direction saat answer). Efeknya, peserta tanpa kamera tetap bisa share screen lewat `replaceTrack`.
+- **Track video keluar** (`outgoingVideo` di page): `screenTrack ?? fx.outputTrack ?? cameraTrack`. Pergantian track memakai `replaceTrack`, tanpa renegosiasi.
+- **Kualitas** (`lib/quality.ts`):
+  - Tier kamera ditentukan jumlah peer: 1 → 720p/1.5 Mbps; 2 → 540p; 3–4 → 360p; 5–7 → 270p; 8+ → 180p.
+  - Mode `hemat` memaksa tier terendah. Mode `hd` naik satu tier.
+  - Screen: resolusi dijaga, 15 fps, bitrate turun sesuai jumlah peer.
+  - Diterapkan lewat `applyQuality()` saat peer connected, jumlah peserta berubah, track berganti, atau mode berubah.
+  - Mode disimpan di `localStorage["nongki:quality"]`.
+- **Efek video** (`processor.ts`):
+  - Alur: video tersembunyi → canvas (maks. lebar 854 px, 24 fps) → `canvas.captureStream`.
+  - Ticker pakai Web Worker supaya tidak di-throttle saat tab di belakang.
+  - Background: ImageSegmenter (confidence mask) → komposit `copy` (mask) → `source-in` (orang) → `destination-over` (background).
+  - Blur pakai trik downscale lalu upscale (murah, jalan juga di Safari).
+  - Filter warna pakai `ctx.filter`, disembunyikan kalau browser tidak mendukung (`supportsCanvasFilter`).
+  - Stiker pakai FaceDetector (BlazeFace, keypoint 0..3 = mata kanan, mata kiri, hidung, mulut), deteksi tiap 2 frame + smoothing.
+  - Model dan wasm di-lazy-load (dynamic import) dan di-cache global. Delegate GPU dulu, fallback ke CPU.
+  - Processor di-pause saat kamera mati atau sedang share screen.
+  - Foto background: hanya JPG/PNG/WebP ≤ 10 MB, pakai object URL, tidak diunggah.
+- **Spotlight share screen**: kalau ada remote dengan `screen && stream`, `SpotlightLayout` menampilkan layar itu besar dan peserta lain di strip (bawah di HP, kanan di desktop).
+  - Tile layar punya tombol fullscreen (Fullscreen API + lock landscape; di iOS pakai `webkitEnterFullscreen`).
+  - Share screen milik sendiri tidak di-spotlight (menghindari efek cermin).
+  - Setiap peserta dirender **tepat sekali**, supaya audio tidak dobel.
+- **Tombol Back** (`useBackGuard`):
+  - Aktif selama stage `meeting`, atau di lobby saat panel efek terbuka.
+  - Urutan saat Back ditekan: dialog terbuka → ditutup; panel terbuka → ditutup; selain itu → muncul dialog "Keluar dari tongkrongan?".
+  - Tombol Keluar juga selalu lewat konfirmasi.
+- **Panel** (`Panel = "chat" | "people" | "effects"`): fullscreen overlay di mobile, sidebar `md:w-80` di desktop. Di lobby, panel efek tampil sebagai bottom sheet/modal.
+- **Reconnect**: saat socket disconnect, semua peer ditutup. Saat connect lagi, `join-room` dikirim ulang. Chat lokal disimpan maks. 300 pesan (`MAX_CHAT_MESSAGES`).
+- Unread chat dihitung berdasarkan `lastReadId`.
+- Nama disimpan di `localStorage["nongki:name"]` (fallback baca `meetlite:name`).
+- Share screen disembunyikan kalau `getDisplayMedia` tidak ada (umumnya di HP).
 
 ## 4. Kontrak Event Socket.IO (sumber kebenaran: `server/src/index.ts`)
 
 | Event | Arah | Payload |
 |---|---|---|
+| `config` | S→C (saat connect) | `{ iceServers, maxParticipants }` |
 | `join-room` | C→S | `{ roomId, name, audio, video }` |
-| `existing-users` | S→C (yang join) | `Participant[]` (peserta lama) |
+| `existing-users` | S→C | `Participant[]` |
 | `user-joined` | S→room lain | `Participant` |
-| `join-error` | S→C | `{ message }` (roomId tidak valid) |
-| `room-full` | S→C | `{ max }` → client set status `full` lalu disconnect |
-| `offer` / `answer` | C→S→C | kirim `{ to, sdp }` → terima `{ from, sdp }` |
+| `join-error` | S→C | `{ message }` (room tidak valid / koneksi per IP berlebih) |
+| `room-full` | S→C | `{ max }` |
+| `offer` / `answer` | C→S→C | kirim `{ to, sdp:{type,sdp} }` → terima `{ from, sdp }` (hanya field tervalidasi yang diteruskan) |
 | `ice-candidate` | C→S→C | kirim `{ to, candidate }` → terima `{ from, candidate }` |
-| `media-state` | C→S→room lain | kirim `{ audio, video, screen }` → terima `{ socketId, audio, video, screen }` |
-| `chat-message` | C→S→**semua** di room (termasuk pengirim) | kirim `{ text }` → terima `{ id, socketId, name, text, time }` |
-| `leave-room` | C→S | – (juga otomatis saat `disconnect`) |
+| `media-state` | C→S→room lain | `{ audio, video, screen }` → `{ socketId, audio, video, screen }` |
+| `chat-message` | C→S→semua di room | `{ text }` → `{ id, socketId, name, text, time }` |
+| `leave-room` | C→S | – (juga otomatis saat disconnect) |
 | `user-left` | S→room lain | `{ socketId }` |
 
-Catatan: `video` di `media-state` dan `join-room` bernilai true juga saat sedang share screen (`videoOn || !!screenTrack`).
+**Keamanan server:**
+- Rate limit token bucket per socket:
+  - join: 5 sekaligus, isi ulang 0.2/detik
+  - signal: 400 sekaligus, isi ulang 40/detik
+  - media: 20 sekaligus, isi ulang 4/detik
+  - chat: 8 sekaligus, isi ulang 1/detik
+- `maxHttpBufferSize` 64 KB. SDP maks. 30 KB, candidate maks. 1 KB.
+- Karakter kontrol dan bidi dibuang dari nama dan chat. Nama maks. 40 char, chat maks. 1000 char.
+- Batas koneksi per IP. Relay hanya ke socket di room yang sama (dan bukan diri sendiri).
+- Header keamanan aktif dan `x-powered-by` dimatikan. `/health` tidak membocorkan jumlah room.
+
+**Event baru wajib**: validasi payload (anggap `unknown`), cek `currentRoom`, pasang rate limiter, dan hanya teruskan field yang dibutuhkan.
 
 ## 5. Konstanta yang Terduplikasi (ubah bersamaan!)
 
-- **Maks. peserta 6**: `server/src/index.ts` (`MAX_PARTICIPANTS`) **dan** `web/lib/config.ts` (`MAX_PARTICIPANTS`). Layout `VideoGrid` juga hanya didesain sampai 6 tile.
-- **Regex room ID `/^[a-z0-9-]{3,40}$/`**: `server/src/index.ts`, `web/lib/room.ts` (`parseRoomInput`), `web/app/room/[id]/page.tsx` (`validRoom`).
-- **Batas nama 40 char**: server `cleanName` dan input lobby `maxLength={40}`.
-- **Batas chat 1000 char**: server dan `ChatPanel` `maxLength={1000}`.
-- **Tipe peserta**: server `Participant` dan web `ParticipantInfo` di `lib/types.ts` (tidak ada shared package).
+- **Regex room ID `/^[a-z0-9-]{3,40}$/`** ada di 3 tempat: server `ROOM_ID_PATTERN`, `web/lib/room.ts`, dan `web/app/room/[id]/page.tsx`.
+- **Nama maks. 40 char**: server `cleanName` dan input lobby.
+- **Chat maks. 1000 char**: server dan `ChatPanel`.
+- **Tipe peserta**: server `Participant` dan web `ParticipantInfo`.
+- **Maks. peserta**: sumber kebenaran di server (env). Web hanya punya `DEFAULT_MAX_PARTICIPANTS` untuk tampilan awal. Layout `VideoGrid` didesain sampai 12 tile.
+- **Palet warna**: `globals.css` `@theme`.
+  - Beberapa nilai hex ditulis langsung dan harus ikut diubah: `backgrounds.ts`, `stickers.ts`, `app/icon.svg`, `themeColor` di `layout.tsx`, dan `accent-[#ffcc00]` di EffectsPanel.
 
 ## 6. Desain / UI
 
-- Tailwind custom colors (`web/tailwind.config.ts`):
-  - `ink-950/900/800/700/600`: latar gelap bertingkat
-  - `accent` (#2dd4a7, hijau mint) dan `accent-dark`
-  - `danger` (#ef4444) dan `danger-dark`
-- Pola umum: `rounded-xl`/`rounded-2xl`, `ring-1 ring-white/5|10`, teks sekunder `text-white/40–60`, tombol primer `bg-accent text-ink-950`.
-- Ikon: `lucide-react`. Unit tinggi layar: `min-h-dvh` / `h-dvh`.
+- Tailwind 4, token di `@theme`:
+  - `ink-950…600`: hitam bertingkat
+  - `accent` (#ffcc00, kuning) dan `accent-dark`
+  - `danger` (#e5383b, merah) dan `danger-dark`
+  - `font-sans` memakai `--font-jakarta`
+- Ciri visual: shadow "offset" merah (`shadow-[4px_4px_0_0_var(--color-danger)]`) di tombol utama dan logo, avatar inisial kuning dengan teks hitam, tombol primer `bg-accent text-ink-950 font-bold`.
+- Nama class Tailwind 4: `bg-linear-to-*` (bukan `bg-gradient-to-*`), `outline-hidden`, dan seterusnya.
+- Tombol kontrol: `h-10 w-10` di HP, `sm:h-12 sm:w-12`. Target: 8 tombol muat satu baris di lebar 390 px.
 
 ## 7. Resep Menambah Fitur
 
 **Fitur real-time baru** (mis. raise hand, reaksi emoji):
-1. Server (`server/src/index.ts`): tambah `socket.on("nama-event", ...)` di dalam `io.on("connection")`. Wajib cek `currentRoom`, validasi payload (anggap `unknown`), lalu `socket.to(currentRoom).emit(...)` atau `io.to(currentRoom).emit(...)`. Kalau statusnya perlu diketahui peserta yang join belakangan, simpan di `Participant` supaya ikut terkirim di `existing-users`/`user-joined`.
-2. Tipe (`web/lib/types.ts`): tambah field di `ParticipantInfo` atau buat tipe baru.
-3. Hook (`web/hooks/useWebRTC.ts`): tambah `socket.on(...)` di efek utama (pakai `patchRemote`/`setState`), buat fungsi `useCallback` untuk emit, lalu return dari hook. Untuk nilai terbaru yang dibaca handler socket, pakai ref `latest`.
-4. UI: tombol di `ControlBar.tsx` (pakai `RoundButton`), indikator di `VideoTile.tsx` atau `ParticipantList.tsx`, lalu sambungkan props di `room/[id]/page.tsx`.
+1. Server: `socket.on(...)` di dalam `io.on("connection")`, ikuti aturan keamanan di §4. Kalau status perlu diketahui peserta yang join belakangan, simpan di `Participant`.
+2. `web/lib/types.ts`: tambah field atau tipe.
+3. `web/hooks/useWebRTC.ts`:
+   - tambah `socket.on(...)` di efek utama (pakai `patchRemote`)
+   - buat fungsi emit dengan `useCallback`, lalu return dari hook
+   - nilai terbaru untuk handler socket taruh di ref `latest`
+4. UI: `RoundButton` di `ControlBar.tsx`, indikator di `VideoTile` / `ParticipantList`, lalu sambungkan di `room/[id]/page.tsx`.
 
-**Kontrol media lokal baru** (mis. ganti device, blur): tambahkan di `useLocalMedia.ts`. Kalau track video berganti, efek `replaceTrack` di `useWebRTC.ts` sudah menangani perubahan `localStream`/`screenTrack`.
+**Efek video baru**:
+- Stiker: tambah ke `FaceSticker` + `FACE_STICKERS` (types.ts), lalu buat fungsi gambar di `stickers.ts` (ukuran relatif terhadap jarak mata `d`).
+- Filter: tambah ke `COLOR_FILTERS` (string CSS filter).
+- Background preset: tambah ke `BACKGROUND_PRESETS`.
+- Model MediaPipe baru: taruh `.tflite` di `public/mediapipe/models/`, daftarkan di `MEDIAPIPE_MODELS`, lalu lazy-load seperti `loadSegmenter`.
 
-**Panel samping baru**: perluas tipe `panel` (`"chat" | "people"`) di `page.tsx` **dan** `ControlBar.tsx`.
+**Ganti sumber video** (mis. pilih kamera depan/belakang): cukup ubah track di `useLocalMedia`. `outgoingVideo` dan efek `replaceTrack` sudah otomatis menyesuaikan.
 
-**Halaman baru**: buat folder di `web/app/`, pakai `Logo` dan layout `mx-auto max-w-6xl px-4 sm:px-6` seperti beranda.
+**Panel baru**:
+1. Tambah ke tipe `Panel` dan `PANEL_TITLES`.
+2. Tambah tombol di ControlBar.
+3. Tambah render di `<aside>` di page.
 
-**Butuh persistensi** (riwayat chat, akun, jadwal): saat ini belum ada DB. Perlu menambah DB di server (atau API route Next).
+Back guard otomatis menutup panel baru juga.
 
-## 8. Batasan & Hal yang Perlu Diwaspadai
+**Overlay/dialog baru**: tambahkan kondisinya ke callback `useBackGuard` di page, supaya tombol Back di HP menutupnya.
 
-- Mesh terasa berat di atas 4–6 orang. Untuk skala lebih besar perlu SFU (LiveKit/mediasoup).
-- Tanpa TURN, sebagian jaringan ketat (kantor/seluler) bisa gagal terhubung.
-- Belum ada host control, rekaman, login, atau riwayat chat.
-- `startScreenShare` memakai `alert()` dan `copyLink` fallback memakai `prompt()`.
-- Peserta tanpa kamera tidak bisa mengirim share screen (tidak ada sender video untuk `replaceTrack`).
-- Deploy: web ke Vercel, server ke Railway/Render/Fly/VPS (butuh WebSocket persisten; Vercel serverless tidak cocok).
+**Butuh request ke domain lain** (CDN, API): tambahkan ke CSP di `next.config.mjs`. Lebih baik self-host.
 
-## 9. Roadmap (dari `docs-rencana.md`)
-SFU · login (NextAuth) · host controls (waiting room, mute, kick) · raise hand & reaksi emoji · background blur · rekaman · jadwal + riwayat chat (DB) · TURN sendiri.
+**Butuh persistensi** (riwayat chat, akun): belum ada DB. Tambahkan di server.
+
+## 8. Batasan & Rekomendasi Skala
+
+- Mesh: tiap peserta meng-encode video **sekali per peer**. Akibatnya, CPU dan upload naik linear: 8 orang = 7 encode dan ±2–3,5 Mbps upload per orang meski tier sudah diturunkan.
+  - Server signaling hampir tidak terbebani (hanya teks).
+  - Untuk 10–50+ orang: pindah ke **SFU (LiveKit/mediasoup)**. Media lewat server, butuh bandwidth server besar, biaya naik, tapi beban klien tetap 1 upload.
+- Tanpa TURN, sebagian jaringan ketat (kantor/seluler) gagal tersambung.
+- Efek video memakan CPU/GPU. Di HP low-end bisa panas, jadi efek sengaja dibatasi 854 px / 24 fps.
+- Belum ada host control, rekaman, login, atau riwayat chat. Room dan chat hilang saat server restart.
+- CSP masih memakai `'unsafe-inline'` untuk script (dibutuhkan bootstrap Next tanpa nonce). Peningkatan berikutnya: nonce-based CSP lewat middleware.
+
+## 9. Roadmap
+SFU · login · host controls (waiting room, mute, kick) · raise hand & reaksi emoji · rekaman · jadwal + riwayat chat (DB) · TURN sendiri · nonce CSP.

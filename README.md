@@ -1,22 +1,24 @@
-# MeetLite
+# Nongki Online
 
-Aplikasi video meeting sederhana berbasis web (versi mini Google Meet / Zoom).
+Aplikasi nongkrong/video meeting berbasis web.
 
-- Video & audio peer-to-peer lewat **WebRTC** (topologi mesh, maks. 6 peserta)
-- Lobby dengan preview kamera, isi nama, atur mic/kamera sebelum masuk
-- Mute/unmute, kamera on/off, **share screen**, salin link undangan
+- Video & audio peer-to-peer lewat **WebRTC** (topologi mesh, default maks. 8 peserta, bisa diatur sampai 12)
+- **Kualitas video dinamis**: resolusi/bitrate turun otomatis makin ramai room, plus mode *Hemat data* / *Kualitas tinggi*
+- Lobby dengan preview kamera, isi nama, atur mic/kamera/efek sebelum masuk
+- **Virtual background** (blur, preset, foto sendiri), **filter warna**, **stiker wajah** — diproses lokal dengan MediaPipe
+- Mute/unmute, kamera on/off, **share screen** (tampil besar + tombol layar penuh), salin link undangan
 - **Chat** real-time dan daftar peserta
 - Tanpa login, tanpa database
 
 ```
 meetlite/
 ├── server/   → signaling server (Node + Express + Socket.IO), port 4000
-└── web/      → frontend (Next.js 14 + Tailwind), port 3000
+└── web/      → frontend (Next.js 16 + React 19 + Tailwind 4), port 3000
 ```
 
 ## Menjalankan di lokal
 
-Butuh Node.js 18 atau lebih baru.
+Butuh Node.js **20.9** atau lebih baru.
 
 ```bash
 # Terminal 1 — signaling server
@@ -27,13 +29,13 @@ npm run dev          # http://localhost:4000  (cek: /health)
 # Terminal 2 — frontend
 cd web
 cp .env.example .env.local
-npm install
+npm install          # otomatis menyalin wasm MediaPipe ke public/mediapipe/wasm
 npm run dev          # http://localhost:3000
 ```
 
-**Uji coba:** buka `http://localhost:3000`, klik **Buat meeting baru**, isi nama, lalu klik **Gabung sekarang**. Salin link-nya dan buka di tab/browser lain (pakai jendela incognito atau browser berbeda supaya terasa seperti peserta lain).
+**Uji coba:** buka `http://localhost:3000`, klik **Buat ruang baru**, isi nama, lalu **Gabung sekarang**. Buka link-nya di jendela incognito / browser lain.
 
-> Kamera/mikrofon hanya bisa diakses di `localhost` atau lewat **HTTPS**. Kalau mau uji dari HP di jaringan yang sama, pakai tunnel HTTPS seperti `ngrok` atau `cloudflared` untuk port 3000 dan 4000, lalu isi `NEXT_PUBLIC_SIGNALING_URL` dengan URL tunnel server.
+> Kamera/mikrofon hanya bisa diakses di `localhost` atau lewat **HTTPS**. Untuk uji dari HP, pakai tunnel HTTPS (`ngrok`/`cloudflared`) untuk port 3000 dan 4000, lalu isi `NEXT_PUBLIC_SIGNALING_URL` dengan URL tunnel server **sebelum build** (nilainya juga masuk ke CSP).
 
 ## Konfigurasi
 
@@ -41,41 +43,40 @@ npm run dev          # http://localhost:3000
 
 | Variabel | Default | Keterangan |
 |---|---|---|
-| `NEXT_PUBLIC_SIGNALING_URL` | `http://localhost:4000` | Alamat signaling server |
-| `NEXT_PUBLIC_TURN_URL` | – | Opsional, TURN server (mis. `turn:turn.domain.com:3478`) |
-| `NEXT_PUBLIC_TURN_USERNAME` / `NEXT_PUBLIC_TURN_CREDENTIAL` | – | Kredensial TURN |
+| `NEXT_PUBLIC_SIGNALING_URL` | `http://localhost:4000` | Alamat signaling server. Dipakai juga di header CSP `connect-src`, jadi rebuild kalau berubah. |
 
-**server (environment variable)**
+**server (environment variable)** — contoh di `server/.env.example`
 
 | Variabel | Default | Keterangan |
 |---|---|---|
 | `PORT` | `4000` | Port server |
-| `CLIENT_ORIGIN` | `*` | Origin frontend yang diizinkan, pisahkan dengan koma |
+| `CLIENT_ORIGIN` | `*` | Origin frontend yang diizinkan (koma). **Wajib di production** — juga dipakai untuk menolak koneksi WebSocket dari situs lain. |
+| `MAX_PARTICIPANTS` | `8` | Maks. peserta per room (2–12) |
+| `MAX_CONN_PER_IP` | `20` | Maks. koneksi socket bersamaan per IP |
+| `TRUST_PROXY` | `0` | `1` kalau di belakang nginx/Cloudflare |
+| `TURN_URLS` / `TURN_SECRET` | – | TURN coturn (`use-auth-secret`). Server membuat kredensial sementara (6 jam) per koneksi. |
 
 ## Cara kerjanya
 
-1. Peserta membuka `/room/<kode>` dan bergabung → socket kirim `join-room`.
-2. Server membalas `existing-users` (daftar peserta lama) dan mengabari yang lain lewat `user-joined`.
-3. **Peserta baru membuat offer** ke setiap peserta lama; yang lama membalas answer. ICE candidate ditukar lewat server.
-4. Setelah tersambung, video/audio mengalir langsung antar-browser. Server hanya meneruskan pesan signaling dan chat.
-5. Share screen mengganti track video dengan `RTCRtpSender.replaceTrack()`, jadi tidak perlu negosiasi ulang.
+1. Peserta membuka `/room/<kode>` → socket tersambung → server mengirim `config` (ICE server + batas peserta).
+2. Peserta kirim `join-room`; server membalas `existing-users` dan mengabari yang lain lewat `user-joined`.
+3. **Peserta baru membuat offer** ke setiap peserta lama; ICE candidate ditukar lewat server.
+4. Video/audio mengalir langsung antar-browser. Server hanya meneruskan signaling dan chat.
+5. Share screen / efek video mengganti track dengan `RTCRtpSender.replaceTrack()` tanpa negosiasi ulang.
+6. Kualitas diatur per koneksi lewat `RTCRtpSender.setParameters()` (bitrate, skala resolusi, fps).
 
-File penting:
-
-- `server/src/index.ts` — logika room, relay signaling, chat
-- `web/hooks/useLocalMedia.ts` — kamera, mikrofon, share screen
-- `web/hooks/useWebRTC.ts` — koneksi socket + satu `RTCPeerConnection` per peserta
-- `web/app/room/[id]/page.tsx` — lobby, ruang meeting, dan layar keluar/penuh/error
+Detail lengkap untuk developer ada di [CLAUDE.md](CLAUDE.md).
 
 ## Deploy
 
-- **Frontend** → Vercel (set `NEXT_PUBLIC_SIGNALING_URL` ke URL server).
-- **Server** → Railway, Render, Fly.io, atau VPS (butuh koneksi WebSocket jangka panjang; Vercel serverless tidak cocok). Jalankan `npm run build && npm start`, set `CLIENT_ORIGIN` ke domain frontend.
-- Untuk pengguna di jaringan kantor/seluler yang ketat, tambahkan TURN server (coturn atau layanan TURN berbayar), kalau tidak sebagian koneksi bisa gagal.
+- Node.js ≥ 20.9 di server.
+- **Frontend**: `npm run build && npm start` (PM2 / Vercel). Set `NEXT_PUBLIC_SIGNALING_URL` saat build.
+- **Server**: Railway, Render, Fly.io, atau VPS (butuh WebSocket persisten). `npm run build && npm start`, set `CLIENT_ORIGIN`.
+- Wajib HTTPS untuk frontend dan server (`wss://`).
+- Untuk jaringan kantor/seluler yang ketat, pasang TURN (coturn), kalau tidak sebagian koneksi bisa gagal.
 
 ## Batasan versi ini
 
-- Mesh: tiap peserta mengirim video ke semua peserta lain, jadi di atas 4–6 orang akan berat. Untuk lebih banyak peserta, pindah ke SFU (LiveKit / mediasoup).
-- Peserta yang masuk **tanpa kamera** bisa melihat dan mendengar orang lain, tapi share screen-nya tidak terkirim (tidak ada jalur video untuk diganti).
+- Mesh: tiap peserta meng-encode & mengirim video ke semua peserta lain. Di atas ±8 orang berat di HP; untuk 10–50+ orang pindah ke SFU (LiveKit / mediasoup).
 - Data room dan chat disimpan di memori server dan hilang saat server restart.
-- Belum ada host control (mute/kick peserta), rekaman, atau login.
+- Belum ada host control (mute/kick), rekaman, atau login.
