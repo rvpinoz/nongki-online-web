@@ -1,0 +1,58 @@
+
+> meetlite-web@1.0.0 dev
+> next dev
+
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:3000
+
+ ✓ Starting...
+ ✓ Ready in 1575ms
+ ○ Compiling / ...
+ ✓ Compiled / in 877ms (525 modules)
+ HEAD / 200 in 1125ms
+ HEAD / 200 in 1127ms
+ HEAD / 200 in 1129ms
+ HEAD / 200 in 1130ms
+ HEAD / 200 in 1131ms
+ HEAD / 200 in 1131ms
+ HEAD / 200 in 1132ms
+ HEAD / 200 in 1134ms
+ HEAD / 200 in 1134ms
+ HEAD / 200 in 1123ms
+ HEAD / 200 in 1110ms
+ HEAD / 200 in 986ms
+ HEAD / 200 in 948ms
+ HEAD / 200 in 938ms
+ HEAD / 200 in 1168ms
+ GET / 200 in 19ms
+ ⚠ Cross origin request detected from 10.1.172.17 to /_next/* resource. In a future major version of Next.js, you will need to explicitly configure "allowedDevOrigins" in next.config to allow this.
+Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+ HEAD / 200 in 13ms
+ HEAD / 200 in 13ms
+ HEAD / 200 in 10ms
+ HEAD / 200 in 14ms
+ HEAD / 200 in 11ms
+ HEAD / 200 in 10ms
+ HEAD / 200 in 12ms
+ HEAD / 200 in 11ms
+ HEAD / 200 in 10ms
+ HEAD / 200 in 10ms
+ HEAD / 200 in 18ms
+ HEAD / 200 in 25ms
+ HEAD / 200 in 17ms
+ HEAD / 200 in 15ms
+ HEAD / 200 in 20ms
+npm warn "3000" is being parsed as a normal command line argument.
+npm warn Unknown cli config "--port". This will stop working in the next major version of npm.
+
+> meetlite-web@1.0.0 start
+> next start 3000
+
+ ⨯ Invalid project directory provided, no such directory: /home/dev-staging/nongki-online-web/web/3000
+npm warn "3000" is being parsed as a normal command line argument.
+npm warn Unknown cli config "--port". This will stop working in the next major version of npm.
+
+> meetlite-web@1.0.0 start
+> next start 3000
+
+ ⨯ Invalid project directory provided, no such directory: /home/dev-staging/nongki-online-web/web/3000
